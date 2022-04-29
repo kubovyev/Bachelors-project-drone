@@ -20,7 +20,8 @@ import numpy as np
 from std_msgs.msg import Float32
 from mrs_msgs.msg import UavState
 from mrs_msgs.msg import VelocityReferenceStamped
-from mrs_msgs.msg import ReferenceStampedSrv
+from mrs_msgs.srv import ReferenceStampedSrv
+from mrs_msgs.srv import ReferenceStampedSrvRequest
 from mrs_msgs.msg import PositionCommand
 import random
 from torchvision.utils import save_image
@@ -34,7 +35,7 @@ uav = '/uav11/'
 # Instantiate CvBridge
 bridge = CvBridge()
 
-pub = rospy.Publisher(uav + 'control_manager/velocity_reference', Float32, queue_size=10)
+# pub = rospy.Publisher(uav + 'control_manager/velocity_reference', VelocityReferenceStamped, queue_size=10)
 raw_prediction_left = rospy.Publisher(uav + 'neural_network/raw_left', Float32, queue_size=10)
 raw_prediction_straight = rospy.Publisher(uav + 'neural_network/raw_straight', Float32, queue_size=10) 
 raw_prediction_right = rospy.Publisher(uav + 'neural_network/raw_right', Float32, queue_size=10)
@@ -109,7 +110,8 @@ def compute(img, hdg):
     print(f'{left:.4f}',f'{straight:.4f}', f'{right:.4f}', end = '\r')
 
     speed_straight = 1
-    speed_angular = 0.05
+    speed_angular = 0.7
+    rate_weight = 1
     message = VelocityReferenceStamped()
     #  CREATING MESSAGES FOR FILTERED DATA
     raw_left_msg = Float32()
@@ -138,13 +140,20 @@ def compute(img, hdg):
     message.reference.use_heading_rate = 1
     message.header.frame_id = uav[1:] + "fcu_untilted"
     rate = (right-left) * speed_angular
-    message.reference.heading_rate = rate
-    ##print("Rate is ", rate)
-    #if prediction[2]-prediction[0] < 0.3:
-    message.reference.velocity.x = speed_straight*straight
-    
+    # message.reference.heading_rate = rate
+    ### message.reference.velocity.x = speed_straight*straight
+    # pub.publish(message)
 
-    pub.publish(message)
+    #   TRAJECTORY MESSAGE CREATION AND PUBLISHING
+    trajectory_msg = ReferenceStampedSrvRequest()
+    trajectory_msg.header.frame_id = uav[1:] + "fcu_untitled"
+
+    if straight > 0.5:  #  Threshold
+        trajectory_msg.reference.position.x = math.cos(rate) * straight
+        trajectory_msg.reference.position.y = math.sin(rate) * (left-right)
+    trajectory_msg.reference.heading = rate * rate_weight
+    trajectory_client(trajectory_msg)
+
 
 heading = None
 
@@ -159,13 +168,13 @@ def heading_callback(hdg_msg):
 
 
 def trajectory_client(reference):
-  10     rospy.wait_for_service('pathfinder/reference')
-  11     try:
-  12         function = rospy.ServiceProxy('pathfinder/reference', ReferenceStampedSrv)
-  13         resp1 = function(reference)
-  14         return None
-  15     except rospy.ServiceException as e:
-  16         print("Service call failed: %s"%e)
+    rospy.wait_for_service(uav + 'pathfinder/reference')
+    try:
+        function = rospy.ServiceProxy(uav + 'pathfinder/reference', ReferenceStampedSrv)
+        resp1 = function(reference)
+        return None
+    except rospy.ServiceException as e:
+        print("Service call failed: %s"%e)
 
 
 ''' Model '''
