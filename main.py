@@ -1,6 +1,10 @@
+#!/usr/bin/python3
+
 import os
 import torch
 import torch.nn as nn
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pickle
 from torchvision import transforms
@@ -24,23 +28,27 @@ import message_filters
 
 ''' Set seed to fix number for repeatability '''
 torch.manual_seed(1)
-uav = '/uav8/'
+uav = '/uav70/'
 
 # Instantiate CvBridge
 bridge = CvBridge()
 
 pub = rospy.Publisher(uav + 'control_manager/velocity_reference', VelocityReferenceStamped, queue_size=10)
+filter_len = 15
+left_arr = [0 for i in range(filter_len)]
+straight_arr = [0 for i in range(filter_len)]
+right_arr = [0 for i in range(filter_len)]
 
 
 
 
 
 def compute(img, hdg):
-    if hdg is not None:
-        print(hdg.value)
-    print("computing")
+    ##if hdg is not None:
+        ##print(hdg.value)
+    ##print("computing")
 
-    print("Received an image!")
+    ##print("Received an image!")
     # Convert your ROS Image message to OpenCV2
     cv2_img = img
     # cv2_img = cv2.imread("test.jpg")
@@ -56,15 +64,38 @@ def compute(img, hdg):
     # cv2.imwrite('camera_image.jpeg', cv2_img)
     # Testing the Model
     prediction = model(tensor)
-    print(prediction[0])
+    ##print(prediction[0])
     prediction = prediction.detach().cpu().numpy()  # OK
     prediction = prediction[0]
     left = prediction[0]
     straight = prediction[1]
     right = prediction[2]
-
+    left_arr.append(left)
+    left_arr.pop(0)
+    straight_arr.append(straight)
+    straight_arr.pop(0)
+    right_arr.append(right)
+    right_arr.pop(0)
+   
+    left = sum(left_arr)/len(left_arr)
+    straight = sum(straight_arr)/len(straight_arr)
+    right = sum(right_arr)/len(right_arr)
+    
+    if left > 1:
+        left = 1
+    elif left < 0:
+        left = 0
+    if straight > 1:
+        straight = 1
+    elif straight < 0:
+        straight = 0
+    if right > 1:
+        right = 1
+    elif right < 0:
+        right = 0
+    
     # print("Left: ", left, ", straight: ", straight, ", right: ", right, " .")
-    print(prediction)
+    print(f'{left:.4f}',f'{straight:.4f}', f'{right:.4f}', end = '\r')
 
     speed_straight = 0.5
     speed_angular = 0.05
@@ -75,7 +106,7 @@ def compute(img, hdg):
     message.header.frame_id = uav[1:] + "fcu"
     rate = (prediction[2]-prediction[0]) * speed_angular
     message.reference.heading_rate = rate
-    print("Rate is ", rate)
+    ##print("Rate is ", rate)
     #if prediction[2]-prediction[0] < 0.3:
     message.reference.velocity.x = speed_straight*prediction[1]
     # else:
@@ -148,20 +179,24 @@ class Simple_Conv_Model(torch.nn.Module):
         self.softmax = nn.Softmax(dim=1)
         self.lin = nn.Linear(512, 200)
         self.lin2 = nn.Linear(200, nbr_classes)
-
+        #self.tanh = torch.nn.Tanh()
         self.weight_init()
 
     def forward(self, x):
-        # save_image(x[0]/255, 'imtest.jpg')
+        #save_image(x[0]/255, 'imtest.jpg')
         x = x/255*2-1
         x = self.conv1(x)
         x = self.maxp1(x)
+        x = nn.functional.tanh(x)
         x = self.conv2(x)
         x = self.maxp2(x)
+        x = nn.functional.tanh(x)
         x = self.conv3(x)
         x = self.maxp3(x)
+        x = nn.functional.tanh(x)
         x = self.conv4(x)
         x = self.maxp4(x)
+        x = nn.functional.tanh(x)
         x = self.lin(x.view(-1, self.lin.in_features))
         x = self.lin2(x.view(-1, self.lin2.in_features))
         x = self.softmax(x)
@@ -185,10 +220,10 @@ CLS = {
 
 def main():
     rospy.init_node('listener')
-
+    print("Node initialized")
 
     # Define your image topic
-    image_topic = uav + "mobius_front/image_raw"
+    image_topic = "/camera/realsense2_camera/color/image_raw"
     heading_topic = uav + "control_manager/position_cmd"
     # Set up your subscriber and define its callback
     # rospy.Subscriber(image_topic, Image, image_callback)
@@ -203,13 +238,13 @@ def main():
     #cv2.imwrite('camera.jpeg', Image)
     # rospy.Subscriber(heading_topic, Float64Stamped, heading_callback)
     rospy.Subscriber(image_topic, Image, image_callback)
-
-
+    print("Subsciber initialized")
     rospy.spin()
 
 if __name__ == '__main__':
+    print("Path follower V1.0")
     #Modules
     model = Simple_Conv_Model(nbr_classes=nbr_cls)
-    model.load_state_dict(torch.load(os.path.abspath(os.path.dirname(__file__)) + '/weights_aug_mir.pth', map_location='cpu'))
+    model.load_state_dict(torch.load(os.path.abspath(os.path.dirname(__file__)) + '/weights_nl_final.pth', map_location='cpu'))
     np.set_printoptions(suppress=True)
     main()
