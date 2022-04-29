@@ -20,6 +20,7 @@ import numpy as np
 from std_msgs.msg import Float32
 from mrs_msgs.msg import UavState
 from mrs_msgs.msg import VelocityReferenceStamped
+from mrs_msgs.msg import ReferenceStampedSrv
 from mrs_msgs.msg import PositionCommand
 import random
 from torchvision.utils import save_image
@@ -28,12 +29,21 @@ import message_filters
 
 ''' Set seed to fix number for repeatability '''
 torch.manual_seed(1)
-uav = '/uav70/'
+uav = '/uav11/'
 
 # Instantiate CvBridge
 bridge = CvBridge()
 
-pub = rospy.Publisher(uav + 'control_manager/velocity_reference', VelocityReferenceStamped, queue_size=10)
+pub = rospy.Publisher(uav + 'control_manager/velocity_reference', Float32, queue_size=10)
+raw_prediction_left = rospy.Publisher(uav + 'neural_network/raw_left', Float32, queue_size=10)
+raw_prediction_straight = rospy.Publisher(uav + 'neural_network/raw_straight', Float32, queue_size=10) 
+raw_prediction_right = rospy.Publisher(uav + 'neural_network/raw_right', Float32, queue_size=10)
+filtered_prediction_left = rospy.Publisher(uav + 'neural_network/filter_left', Float32, queue_size=10)
+filtered_prediction_straight = rospy.Publisher(uav + 'neural_network/filter_straight', Float32, queue_size=10) 
+filtered_prediction_right = rospy.Publisher(uav + 'neural_network/filter_right', Float32, queue_size=10) 
+
+
+
 filter_len = 15
 left_arr = [0 for i in range(filter_len)]
 straight_arr = [0 for i in range(filter_len)]
@@ -51,6 +61,7 @@ def compute(img, hdg):
     ##print("Received an image!")
     # Convert your ROS Image message to OpenCV2
     cv2_img = img
+    cv2_img = cv2.flip(cv2_img, -1)  # Because camera is upside down!
     # cv2_img = cv2.imread("test.jpg")
     # cv2_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
     cv2_img = cv2.resize(cv2_img, (101, 101), interpolation=cv2.INTER_AREA)
@@ -97,21 +108,41 @@ def compute(img, hdg):
     # print("Left: ", left, ", straight: ", straight, ", right: ", right, " .")
     print(f'{left:.4f}',f'{straight:.4f}', f'{right:.4f}', end = '\r')
 
-    speed_straight = 0.5
+    speed_straight = 1
     speed_angular = 0.05
     message = VelocityReferenceStamped()
+    #  CREATING MESSAGES FOR FILTERED DATA
+    raw_left_msg = Float32()
+    raw_left_msg = prediction[0]
+    raw_straight_msg = Float32()
+    raw_straight_msg = prediction[1]
+    raw_right_msg = Float32()
+    raw_right_msg = prediction[2]
+    #  PUBLISHING RAW PREDICTIONS
+    raw_prediction_left.publish(raw_left_msg)
+    raw_prediction_straight.publish(raw_straight_msg)
+    raw_prediction_right.publish(raw_right_msg)
+    #  CREATING MESSAGES FOR FILTERED DATA
+    left_msg = Float32()
+    left_msg = left
+    straight_msg = Float32()
+    straight_msg = straight
+    right_msg = Float32()
+    right_msg = right
+    #  PUBLISHING FILTERED
+    filtered_prediction_left.publish(left_msg)
+    filtered_prediction_straight.publish(straight_msg)
+    filtered_prediction_right.publish(right_msg)
 
 
     message.reference.use_heading_rate = 1
-    message.header.frame_id = uav[1:] + "fcu"
-    rate = (prediction[2]-prediction[0]) * speed_angular
+    message.header.frame_id = uav[1:] + "fcu_untilted"
+    rate = (right-left) * speed_angular
     message.reference.heading_rate = rate
     ##print("Rate is ", rate)
     #if prediction[2]-prediction[0] < 0.3:
-    message.reference.velocity.x = speed_straight*prediction[1]
-    # else:
-    #     message.reference.velocity.x = speed_straight * prediction[1] * 10
-
+    message.reference.velocity.x = speed_straight*straight
+    
 
     pub.publish(message)
 
@@ -121,47 +152,21 @@ def image_callback(img_msg):
     image = bridge.imgmsg_to_cv2(img_msg, "rgb8")
     compute(image, heading)
 
-    # for i in range(1, 10000000):
-    #     pass
 
 def heading_callback(hdg_msg):
     global heading
     heading = hdg_msg
 
 
+def trajectory_client(reference):
+  10     rospy.wait_for_service('pathfinder/reference')
+  11     try:
+  12         function = rospy.ServiceProxy('pathfinder/reference', ReferenceStampedSrv)
+  13         resp1 = function(reference)
+  14         return None
+  15     except rospy.ServiceException as e:
+  16         print("Service call failed: %s"%e)
 
-'''
-def callback(img_msg, heading_msg):
-    # print("Received an image!")
-        # Convert your ROS Image message to OpenCV2
-    cv2_img = bridge.imgmsg_to_cv2(img_msg, "rgb8")
-    # cv2_img = cv2.imread("test.jpg")
-    cv2_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
-    cv2_img = cv2.resize(cv2_img, (101, 101), interpolation = cv2.INTER_AREA)
-    cv2_img = np.asarray(cv2_img)
-    # transform = transforms.ToTensor()
-    # tensor = transform(cv2_img).permute(2,0,1)
-    tensor = torch.tensor(cv2_img, dtype=torch.float).permute(2,0,1)
-    # tensor = tensor.reshape(1, 3, 101, 101)  # MAY BE SOURCE OF ERROR
-    tensor = torch.unsqueeze(tensor, dim=0)
-    #print(tensor)
-    # cv2.imwrite('camera_image.jpeg', cv2_img)
-    # Testing the Model
-    prediction = model(tensor)
-    print(prediction[0])
-    prediction = prediction.detach().cpu().numpy()  # OK
-    prediction = prediction[0]
-    left = prediction[0]
-    straight = prediction[1]
-    right = prediction[2]
-    
-    #print("Left: ", left, ", straight: ", straight, ", right: ", right, " .")
-    print(prediction)
-
-    message = VelocityReferenceStamped()
-    message.reference.velocity.z = 0
-    pub.publish(message)
-'''
 
 ''' Model '''
 
@@ -223,20 +228,16 @@ def main():
     print("Node initialized")
 
     # Define your image topic
-    image_topic = "/camera/realsense2_camera/color/image_raw"
+    image_topic = uav + "rgbd/color/image_raw"
     heading_topic = uav + "control_manager/position_cmd"
+    
+    
+
     # Set up your subscriber and define its callback
     # rospy.Subscriber(image_topic, Image, image_callback)
-    '''
-    image_sub = rospy.Subscriber(image_topic, Image)
-    heading_sub = rospy.Subscriber(heading_topic, Heading)
 
-    ts = message_filters.TimeSynchronizer([image_sub, heading_sub], 10)
-    ts.registerCallback(callback) '''
 
     # Spin until ctrl + c
-    #cv2.imwrite('camera.jpeg', Image)
-    # rospy.Subscriber(heading_topic, Float64Stamped, heading_callback)
     rospy.Subscriber(image_topic, Image, image_callback)
     print("Subsciber initialized")
     rospy.spin()
