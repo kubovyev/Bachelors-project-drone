@@ -45,14 +45,10 @@ filtered_prediction_left = rospy.Publisher(uav + 'neural_network/filter_left', F
 filtered_prediction_straight = rospy.Publisher(uav + 'neural_network/filter_straight', Float32, queue_size=10) 
 filtered_prediction_right = rospy.Publisher(uav + 'neural_network/filter_right', Float32, queue_size=10) 
 
-
-
 filter_len = 15
 left_arr = [0 for i in range(filter_len)]
 straight_arr = [0 for i in range(filter_len)]
 right_arr = [0 for i in range(filter_len)]
-
-
 
 
 
